@@ -21,3 +21,6 @@ management:
   endpoint:
     health:
       show-details: never
+
+market-data:
+  max-quote-age: PT15M

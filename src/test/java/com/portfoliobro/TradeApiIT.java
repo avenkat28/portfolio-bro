@@ -155,6 +155,40 @@ class TradeApiIT {
         assertThat(count()).isZero();
     }
 
+    @Test void holdingsAndPerformanceReplayRealTradesWithMockPrices() throws Exception {
+        submit(UUID.randomUUID(), body("BUY", "10", TIME).replace("\"fees\":\"1\"", "\"fees\":\"2\""))
+                .andExpect(status().isCreated());
+        submit(UUID.randomUUID(), body("BUY", "5", TIME).replace("\"100\"", "\"120\""))
+                .andExpect(status().isCreated());
+        submit(UUID.randomUUID(), body("SELL", "6", TIME).replace("\"100\"", "\"130\"")
+                .replace("\"fees\":\"1\"", "\"fees\":\"2\""))
+                .andExpect(status().isCreated());
+        String base = "/api/v1/portfolios/" + portfolio;
+        mvc.perform(get(base + "/holdings")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.holdings[0].shares").value("9"))
+                .andExpect(jsonPath("$.holdings[0].averageCost").value("106.866667"))
+                .andExpect(jsonPath("$.holdings[0].quote.source").value("MOCK"));
+        mvc.perform(get(base + "/performance")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.valuationComplete").value(true))
+                .andExpect(jsonPath("$.totalPortfolioValue").value("1125.00"))
+                .andExpect(jsonPath("$.realizedProfitLoss").value("136.80"))
+                .andExpect(jsonPath("$.unrealizedProfitLoss").value("163.20"))
+                .andExpect(jsonPath("$.totalProfitLoss").value("300.00"));
+        submit(UUID.randomUUID(), body("BUY", "1", TIME).replace("aapl", "unknown"))
+                .andExpect(status().isCreated());
+        mvc.perform(get(base + "/performance")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.valuationComplete").value(false))
+                .andExpect(jsonPath("$.totalPortfolioValue").doesNotExist())
+                .andExpect(jsonPath("$.knownQuotedValue").value("1125.00"));
+    }
+
+    @Test void emptyAndMissingPortfolioAnalytics() throws Exception {
+        mvc.perform(get("/api/v1/portfolios/" + portfolio + "/performance")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalPortfolioValue").value("0.00"));
+        mvc.perform(get("/api/v1/portfolios/" + UUID.randomUUID() + "/holdings"))
+                .andExpect(status().isNotFound());
+    }
+
     @Test void databaseEnforcesForeignKeysUniquenessAndChecks() throws Exception {
         UUID key = UUID.randomUUID();
         submit(key, body("BUY", "1", TIME)).andExpect(status().isCreated());

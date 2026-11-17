@@ -1,6 +1,6 @@
 # PortfolioBro
 
-Java 21 / Spring Boot backend for a paper investment portfolio tracker. Portfolio CRUD is backed by PostgreSQL, and a pure Java accounting engine reconstructs positions from ordered trades. Trades are persisted with idempotency and overselling protection. Market-data analytics and authentication are subsequent milestones.
+Java 21 / Spring Boot backend for a paper investment portfolio tracker. Portfolio CRUD is backed by PostgreSQL, and a pure Java accounting engine reconstructs positions from ordered trades. Trades are persisted with idempotency and overselling protection. Holdings and performance endpoints use clearly labeled synthetic prices. Authentication and live market data are deferred.
 
 ## Run locally
 
@@ -78,7 +78,7 @@ To check restart persistence, create a portfolio, stop/restart the application, 
 1. **Foundation and portfolios (complete):** Maven Wrapper, PostgreSQL Compose, Flyway, CRUD, errors, OpenAPI, automated tests, and CI.
 2. **Accounting (complete):** pure Java average-cost calculator with BigDecimal, fees, partial/full sells, fractional quantities, and documented rounding.
 3. **Trade persistence (complete):** chronological immutable trades, portfolio row locks, overselling prevention, idempotency keys, and concurrent PostgreSQL tests.
-4. **Analytics:** reconstruct holdings and expose realized/unrealized P&L using deterministic mock prices with explicit freshness/missing-data handling.
+4. **Analytics (complete):** reconstruct holdings and expose realized/unrealized P&L using deterministic mock prices with explicit freshness/missing-data handling.
 5. **Later:** live prices, authentication/ownership before public hosting, and a minimal dashboard.
 
 Use small capability-focused commits with their tests. Add new migrations after a migration has been applied; do not rewrite migration history. No performance claims are made without measurements.
@@ -102,7 +102,7 @@ Trades must arrive in nondecreasing timestamp order across the portfolio; equal 
 
 Example: BUY 10 at $100 with $2 fees, BUY 5 at $120 with $1 fees → 15 shares and $1,603 basis. SELL 6 at $130 with $2 fees → 9 shares, $961.80 basis, and $136.80 realized gain. Selling the final 9 at $125 without fees leaves exactly zero shares/basis and $300 total realized gain.
 
-The calculator tests cover these examples, fractional shares, both half-even tie directions, repeated-sale residuals, closed/reopened positions, fees, losses, independent tickers, overselling, chronology, and invalid precision. Market valuation and unrealized P&L require the later price-provider milestone.
+The calculator tests cover these examples, fractional shares, both half-even tie directions, repeated-sale residuals, closed/reopened positions, fees, losses, independent tickers, overselling, chronology, and invalid precision.
 
 ## Record trades
 
@@ -121,3 +121,20 @@ Fees default to zero. Shares/prices must be positive; fees cannot be negative. T
 Recording runs in one database transaction: acquire a portfolio row lock, check the idempotency key, replay accepted trades, validate the proposed trade, and insert it. Locking the portfolio also covers the first trade in a position. Concurrent SELLs cannot both spend the same shares. Deletion acquires the same lock, and a foreign key prevents removing history. Lock waits are bounded to two seconds and return 503 `LOCK_TIMEOUT`; retry using the same key. No external market-data calls happen while this lock is held.
 
 PostgreSQL integration tests exercise concurrent overselling, concurrent duplicate requests, lock timeout, retry equivalence, rollback after rejection, sequence ordering, foreign keys, database checks, and portfolio-scoped keys.
+
+## Holdings and performance
+
+```sh
+curl http://localhost:8080/api/v1/portfolios/UUID/holdings
+curl http://localhost:8080/api/v1/portfolios/UUID/performance
+```
+
+Holdings contains open positions, quantity, basis, average cost, realized P&L for that ticker, and quote/value/unrealized P&L. Performance includes realized P&L across **all** positions, including closed ones, plus remaining cost basis, total portfolio value, unrealized P&L, total P&L, and `knownQuotedValue`. Monetary fields are strings rounded to two decimals; average cost has six decimals. Aggregation uses unrounded values, so rounded rows may not sum exactly to rounded totals.
+
+`marketdata.MarketPriceProvider` batches all open tickers in one call after the database snapshot transaction finishes. The default provider is entirely synthetic: AAPL=$125, MSFT=$450, BRK.B=$500, with source `MOCK`. Its timestamp is the fixture observation time generated at the request, not a timestamp from an exchange. **These are not live investment prices.** Unknown tickers are `MISSING`.
+
+Quote statuses are `FRESH`, `STALE`, `MISSING`, and `UNAVAILABLE`. Prices more than 15 minutes old are stale (configure `market-data.max-quote-age`). Stale holdings values are labeled estimates. Missing/unavailable prices yield null valuation fields, never fake zeros. If any open position lacks a fresh valid USD quote, `valuationComplete=false` and current total value, unrealized P&L, and total P&L are null. `knownQuotedValue` is a partial subtotal and may include stale estimates; it is not a complete current valuation. Realized P&L and cost basis remain available during an outage. Empty/fully closed portfolios have complete zero market value; closed realized P&L remains included.
+
+Market value is shares × quote. Unrealized P&L is market value minus remaining basis. Total P&L is realized plus unrealized. Portfolio value excludes cash and earlier sale proceeds. No percentage return, annualization, FIFO tax report, or tax advice is provided. Cash deposits/withdrawals, splits, dividends, mergers, ticker changes, and other corporate actions are not modeled. Affected portfolios cannot claim accurate quantities or returns until those events are supported.
+
+Provider failures degrade analytics rather than trade recording. A later real-data adapter must add bounded timeouts, caching, provider rate-limit handling, and market-calendar/delay semantics before replacing these fixtures.
