@@ -18,9 +18,12 @@ import static org.mockito.Mockito.*;
 class PortfolioServiceTest {
     private static final Instant NOW = Instant.parse("2026-11-17T12:00:00Z");
     @Mock PortfolioRepository repository;
+    @Mock com.portfoliobro.repository.TradeRepository trades;
+    @Mock jakarta.persistence.EntityManager entityManager;
+    @Mock jakarta.persistence.Query query;
 
     private PortfolioService service() {
-        return new PortfolioService(repository, Clock.fixed(NOW, ZoneOffset.UTC));
+        return new PortfolioService(repository, Clock.fixed(NOW, ZoneOffset.UTC), trades, entityManager);
     }
 
     @Test void createUsesNormalizedNameAndServerOwnedFields() {
@@ -44,7 +47,8 @@ class PortfolioServiceTest {
 
     @Test void missingDeleteDoesNotCallRepositoryDelete() {
         UUID id = UUID.randomUUID();
-        when(repository.findById(id)).thenReturn(Optional.empty());
+        when(entityManager.createNativeQuery(anyString())).thenReturn(query);
+        when(repository.findForUpdate(id)).thenReturn(Optional.empty());
         assertThatThrownBy(() -> service().delete(id)).isInstanceOf(PortfolioNotFoundException.class);
         verify(repository, never()).delete(any());
     }

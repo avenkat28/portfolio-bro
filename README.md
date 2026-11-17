@@ -1,6 +1,6 @@
 # PortfolioBro
 
-Java 21 / Spring Boot backend for a paper investment portfolio tracker. Portfolio CRUD is backed by PostgreSQL, and a pure Java accounting engine reconstructs positions from ordered trades. Trade persistence and endpoints, market-data analytics, and authentication are subsequent milestones.
+Java 21 / Spring Boot backend for a paper investment portfolio tracker. Portfolio CRUD is backed by PostgreSQL, and a pure Java accounting engine reconstructs positions from ordered trades. Trades are persisted with idempotency and overselling protection. Market-data analytics and authentication are subsequent milestones.
 
 ## Run locally
 
@@ -53,7 +53,7 @@ HTTP → controller (validation/DTOs)
 
 Packages under `com.portfoliobro`: `controller`, `service`, `repository`, `domain`, `dto`, `exception`, and `config`. JPA entities do not cross the API boundary. Updates rely on transactional dirty checking. Flyway owns schema changes; Hibernate validates rather than modifies the schema. Open Session in View is disabled.
 
-The `portfolio` table stores UUID ID, name, description, USD currency, and creation/update timestamps. Database constraints enforce required fields, trimmed nonempty names, lengths, and USD currency. An index supports deterministic list ordering. No trades table exists yet; consequently every portfolio in this milestone can be deleted. The trade milestone must introduce foreign-key restriction and reject deletion of nonempty portfolios.
+The `portfolio` table stores UUID ID, name, description, USD currency, and creation/update timestamps. Database constraints enforce required fields, trimmed nonempty names, lengths, and USD currency. An index supports deterministic list ordering. The `trade` table references its portfolio with restricted deletion. Portfolios containing trades cannot be deleted (409). Trades are append-only through the API, indexed by portfolio/sequence and portfolio/ticker/sequence, and uniquely constrained by portfolio/idempotency key.
 
 ## Test and build
 
@@ -77,7 +77,7 @@ To check restart persistence, create a portfolio, stop/restart the application, 
 
 1. **Foundation and portfolios (complete):** Maven Wrapper, PostgreSQL Compose, Flyway, CRUD, errors, OpenAPI, automated tests, and CI.
 2. **Accounting (complete):** pure Java average-cost calculator with BigDecimal, fees, partial/full sells, fractional quantities, and documented rounding.
-3. **Trade persistence:** chronological immutable trades, portfolio row locks, overselling prevention, idempotency keys, and concurrent PostgreSQL tests.
+3. **Trade persistence (complete):** chronological immutable trades, portfolio row locks, overselling prevention, idempotency keys, and concurrent PostgreSQL tests.
 4. **Analytics:** reconstruct holdings and expose realized/unrealized P&L using deterministic mock prices with explicit freshness/missing-data handling.
 5. **Later:** live prices, authentication/ownership before public hosting, and a minimal dashboard.
 
@@ -103,3 +103,21 @@ Trades must arrive in nondecreasing timestamp order across the portfolio; equal 
 Example: BUY 10 at $100 with $2 fees, BUY 5 at $120 with $1 fees → 15 shares and $1,603 basis. SELL 6 at $130 with $2 fees → 9 shares, $961.80 basis, and $136.80 realized gain. Selling the final 9 at $125 without fees leaves exactly zero shares/basis and $300 total realized gain.
 
 The calculator tests cover these examples, fractional shares, both half-even tie directions, repeated-sale residuals, closed/reopened positions, fees, losses, independent tickers, overselling, chronology, and invalid precision. Market valuation and unrealized P&L require the later price-provider milestone.
+
+## Record trades
+
+```sh
+curl -i http://localhost:8080/api/v1/portfolios/UUID/trades \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 12345678-1234-4234-8234-123456789abc' \
+  -d '{"side":"BUY","ticker":"AAPL","shares":"10","pricePerShare":"100","fees":"2","executedAt":"2026-01-01T12:00:00Z"}'
+curl 'http://localhost:8080/api/v1/portfolios/UUID/trades?ticker=AAPL&page=0&size=20'
+```
+
+Use a new UUID `Idempotency-Key` for each intended trade and reuse it when retrying that trade. A new trade returns 201; an identical retry returns 200 and the original trade, including after newer trades. Decimal equivalence and ticker normalization are respected. Reusing the key with a different payload returns 409 `IDEMPOTENCY_CONFLICT`. Failed submissions do not consume a key. Keys are scoped to a portfolio. Trade responses serialize financial values as decimal strings.
+
+Fees default to zero. Shares/prices must be positive; fees cannot be negative. Timestamps must be no later than the server clock, use at most microsecond precision, and be nondecreasing across the portfolio. Equal timestamps use portfolio-local sequence order. Backdating returns 409 `TRADE_CHRONOLOGY`; overselling returns 409 `OVERSELL`. Trade edits/deletes and backdated imports are intentionally unsupported.
+
+Recording runs in one database transaction: acquire a portfolio row lock, check the idempotency key, replay accepted trades, validate the proposed trade, and insert it. Locking the portfolio also covers the first trade in a position. Concurrent SELLs cannot both spend the same shares. Deletion acquires the same lock, and a foreign key prevents removing history. Lock waits are bounded to two seconds and return 503 `LOCK_TIMEOUT`; retry using the same key. No external market-data calls happen while this lock is held.
+
+PostgreSQL integration tests exercise concurrent overselling, concurrent duplicate requests, lock timeout, retry equivalence, rollback after rejection, sequence ordering, foreign keys, database checks, and portfolio-scoped keys.

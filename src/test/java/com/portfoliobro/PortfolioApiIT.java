@@ -34,7 +34,7 @@ class PortfolioApiIT {
     @Autowired JdbcTemplate jdbc;
     final JsonMapper json = JsonMapper.builder().build();
 
-    @BeforeEach void cleanDatabase() { jdbc.update("DELETE FROM portfolio"); }
+    @BeforeEach void cleanDatabase() { jdbc.update("DELETE FROM trade"); jdbc.update("DELETE FROM portfolio"); }
 
     @Test void fullLifecyclePersistsAcrossIndependentRequests() throws Exception {
         String body = mvc.perform(post("/api/v1/portfolios").contentType("application/json")
@@ -97,7 +97,7 @@ class PortfolioApiIT {
     }
 
     @Test void migrationsAndDatabaseConstraintsAreActive() {
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Long.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM flyway_schema_history WHERE success", Long.class)).isEqualTo(2);
         for (String name : new String[]{"", "  ", " padded "}) {
             assertThatThrownBy(() -> jdbc.update("INSERT INTO portfolio VALUES (gen_random_uuid(), ?, NULL, 'USD', now(), now())", name))
                     .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);

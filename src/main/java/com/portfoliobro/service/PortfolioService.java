@@ -4,6 +4,9 @@ import com.portfoliobro.domain.Portfolio;
 import com.portfoliobro.dto.*;
 import com.portfoliobro.exception.PortfolioNotFoundException;
 import com.portfoliobro.repository.PortfolioRepository;
+import com.portfoliobro.repository.TradeRepository;
+import com.portfoliobro.exception.TradeConflictException;
+import jakarta.persistence.EntityManager;
 import java.time.Clock;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
@@ -16,10 +19,14 @@ import org.springframework.transaction.annotation.Transactional;
 public class PortfolioService {
     private final PortfolioRepository repository;
     private final Clock clock;
+    private final TradeRepository trades;
+    private final EntityManager entityManager;
 
-    public PortfolioService(PortfolioRepository repository, Clock clock) {
+    public PortfolioService(PortfolioRepository repository, Clock clock, TradeRepository trades, EntityManager entityManager) {
         this.repository = repository;
         this.clock = clock;
+        this.trades = trades;
+        this.entityManager = entityManager;
     }
 
     @Transactional
@@ -42,7 +49,14 @@ public class PortfolioService {
     }
 
     @Transactional
-    public void delete(UUID id) { repository.delete(find(id)); }
+    public void delete(UUID id) {
+        entityManager.createNativeQuery("SET LOCAL lock_timeout = '2s'").executeUpdate();
+        Portfolio portfolio = repository.findForUpdate(id).orElseThrow(() -> new PortfolioNotFoundException(id));
+        if (trades.existsByPortfolioId(id)) {
+            throw new TradeConflictException("PORTFOLIO_HAS_TRADES", "Cannot delete a portfolio with trade history");
+        }
+        repository.delete(portfolio);
+    }
 
     private Portfolio find(UUID id) {
         return repository.findById(id).orElseThrow(() -> new PortfolioNotFoundException(id));

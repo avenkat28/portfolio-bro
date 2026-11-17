@@ -18,6 +18,32 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(problem);
     }
 
+    @ExceptionHandler(TradeConflictException.class)
+    ResponseEntity<ProblemDetail> tradeConflict(TradeConflictException exception) {
+        return problem(HttpStatus.CONFLICT, exception.getCode(), exception.getMessage());
+    }
+
+    @ExceptionHandler(OversellException.class)
+    ResponseEntity<ProblemDetail> oversell(OversellException exception) {
+        return problem(HttpStatus.CONFLICT, "OVERSELL", exception.getMessage());
+    }
+
+    @ExceptionHandler(InvalidTradeException.class)
+    ResponseEntity<ProblemDetail> invalidTrade(InvalidTradeException exception) {
+        return problem(HttpStatus.BAD_REQUEST, "INVALID_TRADE", exception.getMessage());
+    }
+
+    @ExceptionHandler(org.springframework.dao.PessimisticLockingFailureException.class)
+    ResponseEntity<ProblemDetail> lockTimeout(Exception exception) {
+        return problem(HttpStatus.SERVICE_UNAVAILABLE, "LOCK_TIMEOUT", "Portfolio is busy; retry with the same idempotency key");
+    }
+
+    private ResponseEntity<ProblemDetail> problem(HttpStatus status, String code, String detail) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
+        problem.setProperty("code", code);
+        return ResponseEntity.status(status).body(problem);
+    }
+
     @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(MethodArgumentNotValidException exception,
             HttpHeaders headers, HttpStatusCode status, WebRequest request) {
