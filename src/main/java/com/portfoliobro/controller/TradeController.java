@@ -14,6 +14,10 @@ public class TradeController {
     private final TradeService service;
     public TradeController(TradeService service) { this.service = service; }
 
+    @io.swagger.v3.oas.annotations.Operation(summary = "Record a chronological paper trade",
+            description = "Requires a UUID Idempotency-Key. Returns 201 for a new trade, 200 for an identical retry, "
+                    + "409 for overselling, chronology, or idempotency conflicts, and 503 for a lock timeout. "
+                    + "Retry with the same key. executedAt supports up to six fractional second digits.")
     @PostMapping
     public ResponseEntity<TradeResponse> record(@PathVariable UUID portfolioId,
             @RequestHeader("Idempotency-Key") UUID key, @Valid @RequestBody CreateTradeRequest request) {

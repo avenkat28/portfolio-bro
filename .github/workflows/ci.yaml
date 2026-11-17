@@ -12,4 +12,25 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - run: ./mvnw --batch-mode verify
+      - run: ./mvnw --batch-mode --no-transfer-progress verify
+  container-smoke:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create disposable local database credentials
+        run: |
+          python3 - <<'PYTHON'
+          import pathlib, secrets
+          pathlib.Path('.env').write_text('DB_USERNAME=ci\nDB_PASSWORD=' + secrets.token_urlsafe(24) + '\n')
+          PYTHON
+      - name: Build and start local application
+        run: docker compose --profile app up --build -d --wait --wait-timeout 180
+      - name: Exercise running API
+        run: python3 scripts/smoke-test.py
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose --profile app logs --no-color
+      - name: Remove disposable test services
+        if: always()
+        run: docker compose --profile app down --volumes

@@ -141,6 +141,42 @@ class TradeApiIT {
         }
     }
 
+    @Test void deletionRacingFirstTradeCannotLoseHistory() throws Exception {
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            CountDownLatch start = new CountDownLatch(1);
+            Future<Integer> trade = executor.submit(() -> {
+                if (!start.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Start barrier timed out");
+                return submit(UUID.randomUUID(), body("BUY", "1", TIME)).andReturn().getResponse().getStatus();
+            });
+            Future<Integer> deletion = executor.submit(() -> {
+                if (!start.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("Start barrier timed out");
+                return mvc.perform(delete("/api/v1/portfolios/" + portfolio)).andReturn().getResponse().getStatus();
+            });
+            start.countDown();
+            int recorded = trade.get(10, TimeUnit.SECONDS);
+            int deleted = deletion.get(10, TimeUnit.SECONDS);
+            if (recorded == 201) {
+                assertThat(deleted).isEqualTo(409);
+                assertThat(count()).isEqualTo(1);
+            } else {
+                assertThat(recorded).isEqualTo(404);
+                assertThat(deleted).isEqualTo(204);
+                assertThat(count()).isZero();
+            }
+        }
+    }
+
+    @Test void recordedTradesHaveNoMutationEndpoints() throws Exception {
+        String first = submit(UUID.randomUUID(), body("BUY", "1", TIME)).andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String tradePath = path() + "/" + json.readTree(first).get("id").asText();
+        // No trade-resource mutation routes exist (a missing route returns 404).
+        mvc.perform(delete(tradePath)).andExpect(status().isNotFound());
+        mvc.perform(patch(tradePath).contentType("application/json").content("{}"))
+                .andExpect(status().isNotFound());
+        assertThat(count()).isEqualTo(1);
+    }
+
     @Test void heldPortfolioLockReturnsRetryable503() throws Exception {
         try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);

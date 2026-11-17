@@ -1,5 +1,12 @@
 target/
-.env
+.env*
+!.env.example
 .idea/
 *.iml
 .DS_Store
+*.sql.backup
+*-backup.sql
+__pycache__/
+*.dump
+*.pem
+*.key

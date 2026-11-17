@@ -1,6 +1,6 @@
 # PortfolioBro
 
-Java 21 / Spring Boot backend for a paper investment portfolio tracker. Portfolio CRUD is backed by PostgreSQL, and a pure Java accounting engine reconstructs positions from ordered trades. Trades are persisted with idempotency and overselling protection. Holdings and performance endpoints use clearly labeled synthetic prices. Authentication and live market data are deferred.
+Java 21 / Spring Boot backend for a paper investment portfolio tracker. Backend MVP: portfolio CRUD, chronological immutable trades, average-cost accounting, holdings, and P&L analytics. PostgreSQL transactions prevent concurrent overselling and idempotency keys protect retries. Prices are clearly labeled synthetic fixtures. This is a paper tracker, not a brokerage. Authentication, live prices, and a frontend are deferred.
 
 ## Run locally
 
@@ -138,3 +138,57 @@ Quote statuses are `FRESH`, `STALE`, `MISSING`, and `UNAVAILABLE`. Prices more t
 Market value is shares × quote. Unrealized P&L is market value minus remaining basis. Total P&L is realized plus unrealized. Portfolio value excludes cash and earlier sale proceeds. No percentage return, annualization, FIFO tax report, or tax advice is provided. Cash deposits/withdrawals, splits, dividends, mergers, ticker changes, and other corporate actions are not modeled. Affected portfolios cannot claim accurate quantities or returns until those events are supported.
 
 Provider failures degrade analytics rather than trade recording. A later real-data adapter must add bounded timeouts, caching, provider rate-limit handling, and market-calendar/delay semantics before replacing these fixtures.
+
+## Backend MVP endpoint reference
+
+| Method | Path under `/api/v1` | Request / response |
+|---|---|---|
+| POST | `/portfolios` | Name/description → 201 portfolio and Location |
+| GET | `/portfolios` | Page/size → 200 portfolio page |
+| GET | `/portfolios/{id}` | 200 portfolio or 404 |
+| PATCH | `/portfolios/{id}` | Name/description changes → 200 portfolio |
+| DELETE | `/portfolios/{id}` | 204 if empty; 409 if trades exist |
+| POST | `/portfolios/{id}/trades` | Idempotency-Key and trade → 201 new / 200 replay |
+| GET | `/portfolios/{id}/trades` | Optional ticker, page/size → ordered trade page |
+| GET | `/portfolios/{id}/holdings` | Open positions with quote status and estimates |
+| GET | `/portfolios/{id}/performance` | Basis, realized/unrealized P&L, complete or partial valuation |
+
+## Docker application and smoke test
+
+```sh
+cp .env.example .env
+# Replace the placeholder password, then:
+docker compose --profile app up --build -d --wait
+python3 scripts/smoke-test.py
+```
+
+The smoke test creates a persistent demo portfolio and checks health, real HTTP trade submission, retry behavior, overselling rejection, holdings, expected P&L, and deletion protection. The expected P&L uses the synthetic AAPL fixture. CI first runs `./mvnw verify`, then builds/starts the container application and runs this smoke test in a separate job. A Git push triggers tests, not public deployment.
+
+See [local operations](docs/operations.md) for restart, backup/restore, troubleshooting, and public-repository guidance. No internet deployment is configured. There is no authentication; all published ports remain localhost-only. Before multi-user hosting, add authenticated ownership checks to every portfolio/trade operation.
+
+```mermaid
+erDiagram
+    PORTFOLIO ||--o{ TRADE : contains
+    PORTFOLIO {
+        uuid id PK
+        varchar name
+        varchar description
+        varchar currency
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    TRADE {
+        uuid id PK
+        uuid portfolio_id FK
+        bigint sequence_number
+        uuid idempotency_key
+        varchar side
+        varchar ticker
+        numeric shares
+        numeric price_per_share
+        numeric fees
+        timestamptz executed_at
+    }
+```
+
+The local single-user MVP is complete. Optional follow-ups are live data with caching/rate limits, authentication and ownership, a small dashboard, import/correction events, and explicit cash/corporate-action accounting. Keep these separate from the MVP and do not add microservices or messaging infrastructure without a concrete need.
