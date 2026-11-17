@@ -1,6 +1,6 @@
 # PortfolioBro
 
-Java 21 / Spring Boot backend for a paper investment portfolio tracker. This first working slice provides portfolio CRUD backed by PostgreSQL. Trades, holdings, accounting, market data, and authentication are subsequent milestones.
+Java 21 / Spring Boot backend for a paper investment portfolio tracker. Portfolio CRUD is backed by PostgreSQL, and a pure Java accounting engine reconstructs positions from ordered trades. Trade persistence and endpoints, market-data analytics, and authentication are subsequent milestones.
 
 ## Run locally
 
@@ -75,10 +75,31 @@ To check restart persistence, create a portfolio, stop/restart the application, 
 
 ## Development steps
 
-1. **Foundation and portfolios (this milestone):** Maven Wrapper, PostgreSQL Compose, Flyway, CRUD, errors, OpenAPI, automated tests, and CI.
-2. **Accounting:** pure Java average-cost calculator with BigDecimal, fees, partial/full sells, fractional quantities, and documented rounding.
+1. **Foundation and portfolios (complete):** Maven Wrapper, PostgreSQL Compose, Flyway, CRUD, errors, OpenAPI, automated tests, and CI.
+2. **Accounting (complete):** pure Java average-cost calculator with BigDecimal, fees, partial/full sells, fractional quantities, and documented rounding.
 3. **Trade persistence:** chronological immutable trades, portfolio row locks, overselling prevention, idempotency keys, and concurrent PostgreSQL tests.
 4. **Analytics:** reconstruct holdings and expose realized/unrealized P&L using deterministic mock prices with explicit freshness/missing-data handling.
 5. **Later:** live prices, authentication/ownership before public hosting, and a minimal dashboard.
 
 Use small capability-focused commits with their tests. Add new migrations after a migration has been applied; do not rewrite migration history. No performance claims are made without measurements.
+
+## Average-cost accounting
+
+`AverageCostCalculator` accepts an ordered `List<TradeEntry>` and returns an immutable ticker-to-`PositionSnapshot` map. It has no Spring, database, or market-data dependencies. Replay is stateless and includes closed positions so realized P&L is retained. Inputs are immutable and tickers are normalized to uppercase.
+
+For a BUY, add shares and add `shares × price + fees` to remaining cost basis. Average cost is remaining basis divided by shares. For a SELL, reject quantities exceeding the position at that point, remove `remaining basis × sold shares / held shares`, and add `shares × price − fees − allocated basis` to realized P&L. Fees may exceed sale proceeds, producing a loss. Reopening a position preserves previous realized P&L. This is average-cost paper accounting, not FIFO or tax reporting.
+
+Trades must arrive in nondecreasing timestamp order across the portfolio; equal timestamps preserve input order. Replay never sorts or repairs invalid history. The future persistence service will load portfolio sequence order and validate future timestamps against an injected clock. The calculator deliberately has no wall-clock dependency.
+
+### Precision policy
+
+- All financial values use `BigDecimal`; construct them from decimal strings, never `double`.
+- Shares must be positive and fit `NUMERIC(19,8)`; prices must be positive and fees nonnegative, both fitting `NUMERIC(19,6)`. Excess meaningful precision is rejected, not rounded. Equivalent trailing zeros are accepted.
+- Multiplication and addition are exact. Basis allocation and average-cost division use scale 18 and `HALF_EVEN` rounding. Internal results are not rounded to cents.
+- On full liquidation, remove all remaining basis exactly, absorbing any residual from earlier partial-sale divisions. Quantity, basis, and average cost become zero.
+- Computed monetary amounts must have magnitude below `10^30`; unsupported results fail explicitly. Aggregate share quantities are not truncated to the per-trade input range.
+- Future analytics DTOs will round money to two decimals and average cost to six decimals after aggregation, serializing decimals as strings. These endpoints are not yet implemented.
+
+Example: BUY 10 at $100 with $2 fees, BUY 5 at $120 with $1 fees → 15 shares and $1,603 basis. SELL 6 at $130 with $2 fees → 9 shares, $961.80 basis, and $136.80 realized gain. Selling the final 9 at $125 without fees leaves exactly zero shares/basis and $300 total realized gain.
+
+The calculator tests cover these examples, fractional shares, both half-even tie directions, repeated-sale residuals, closed/reopened positions, fees, losses, independent tickers, overselling, chronology, and invalid precision. Market valuation and unrealized P&L require the later price-provider milestone.
